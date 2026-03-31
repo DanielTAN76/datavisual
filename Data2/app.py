@@ -1,9 +1,12 @@
 
 import streamlit as st
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
 import textwrap
+import io
+import zipfile
 
 def smart_wrap(text, width):
     lines = []
@@ -100,9 +103,10 @@ def main():
                 st.success(f"成功识别出 {len(parsed_questions)} 个问题！")
                 st.header("2. 数据可视化")
 
-                # --- Font Fix ---
-                font_path = '/System/Library/Fonts/STHeiti Medium.ttc'
-                prop = fm.FontProperties(fname=font_path)
+                plt.rcParams['font.sans-serif'] = ['WenQuanYi Zen Hei', 'SimHei', 'DejaVu Sans']
+                plt.rcParams['axes.unicode_minus'] = False
+                
+                charts_for_export = []
 
                 for i, question in enumerate(parsed_questions):
                     st.subheader(f"题目: {question['title']}")
@@ -120,7 +124,7 @@ def main():
                         st.warning("处理后无有效数据可供绘图。")
                         continue
 
-                    fig, ax = plt.subplots(figsize=(10, 6))
+                    fig, ax = plt.subplots(figsize=(12, 8))
                     
                     formatter = FuncFormatter(lambda y, _: f'{y:.0f}%')
                     labels = plot_df.index.astype(str)
@@ -147,20 +151,52 @@ def main():
                             ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop)
 
                     elif chart_type == "饼图":
-                        wrapped_labels = [smart_wrap(l, width=30) for l in labels]
-                        wedges, texts, autotexts = ax.pie(plot_df[data_col], autopct='%1.1f%%', startangle=90, pctdistance=0.85)
-                        ax.legend(wedges, wrapped_labels, title="选项", loc="center left", bbox_to_anchor=(1, 0, 0.5, 1), prop=prop)
-                        plt.setp(autotexts, size=10, weight="bold", fontproperties=prop)
+                        wedges, _ = ax.pie(plot_df[data_col], startangle=90, pctdistance=0.85, radius=1.2)
                         ax.axis('equal')
+                        bbox_props = dict(boxstyle="square,pad=0.3", fc="w", ec="k", lw=0.72)
+                        kw = dict(arrowprops=dict(arrowstyle="-"), bbox=bbox_props, zorder=0, va="center")
+                        for j, w in enumerate(wedges):
+                            ang = (w.theta2 - w.theta1)/2. + w.theta1
+                            y = np.sin(np.deg2rad(ang))
+                            x = np.cos(np.deg2rad(ang))
+                            horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
+                            connectionstyle = f"angle,angleA=0,angleB={ang}"
+                            kw["arrowprops"].update({"connectionstyle": connectionstyle})
+                            label_text = f"{plot_df.index[j]}: {plot_df[data_col][j]:.1f}%"
+                            ax.annotate(label_text, xy=(x*1.2, y*1.2), xytext=(1.35*np.sign(x), 1.4*y),
+                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop)
 
-                    ax.set_title(question['title'], fontsize=16, pad=20, fontproperties=prop)
+                    prop_title = fm.FontProperties(fname=font_path, size=32)
+                    ax.set_title(question['title'], fontproperties=prop_title, pad=40)
                     
-                    # Set font for tick labels
                     for label in ax.get_xticklabels() + ax.get_yticklabels():
                         label.set_fontproperties(prop)
 
                     plt.tight_layout()
-                    st.pyplot(fig)
+                    
+                    buf = io.BytesIO()
+                    fig.savefig(buf, format="png", bbox_inches="tight")
+                    st.image(buf, use_column_width=True)
+                    charts_for_export.append({"title": question['title'], "chart_type": chart_type, "buffer": buf})
+                    plt.close(fig)
+
+                if charts_for_export:
+                    st.header("3. 导出图表")
+                    st.info("您可以直接在图表上右键点击‘复制图片’或‘图片另存为’。或使用下方的按钮一次性导出所有图表。")
+                    zip_buffer = io.BytesIO()
+                    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
+                        for chart in charts_for_export:
+                            safe_title = "".join(c for c in chart['title'] if c.isalnum() or c in (' ', '_')).rstrip()
+                            filename = f"{safe_title}_{chart['chart_type']}.png"
+                            chart['buffer'].seek(0)
+                            zip_file.writestr(filename, chart['buffer'].read())
+                    
+                    st.download_button(
+                        label="一键导出所有图表 (ZIP)",
+                        data=zip_buffer.getvalue(),
+                        file_name="所有图表.zip",
+                        mime="application/zip"
+                    )
 
         except Exception as e:
             st.error(f"处理文件时出错: {e}")
