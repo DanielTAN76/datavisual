@@ -132,23 +132,23 @@ def main():
                     if chart_type == "条形图":
                         wrapped_labels = [smart_wrap(l, width=40) for l in labels]
                         bars = ax.barh(wrapped_labels, plot_df[data_col])
-                        ax.set_xlabel("百分比", fontproperties=prop)
+                        ax.set_xlabel("百分比")
                         ax.xaxis.set_major_formatter(formatter)
-                        ax.set_ylabel("", fontproperties=prop)
+                        ax.set_ylabel("")
                         ax.invert_yaxis()
                         for bar in bars:
                             xval = bar.get_width()
-                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left', fontproperties=prop)
+                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left')
                     
                     elif chart_type == "柱状图":
                         wrapped_labels = [smart_wrap(l, width=15) for l in labels]
                         bars = ax.bar(wrapped_labels, plot_df[data_col])
-                        ax.set_ylabel("百分比", fontproperties=prop)
+                        ax.set_ylabel("百分比")
                         ax.yaxis.set_major_formatter(formatter)
-                        ax.set_xlabel("", fontproperties=prop)
+                        ax.set_xlabel("")
                         for bar in bars:
                             yval = bar.get_height()
-                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop)
+                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center')
 
                     elif chart_type == "饼图":
                         wedges, _ = ax.pie(plot_df[data_col], startangle=90, pctdistance=0.85, radius=1.2)
@@ -164,7 +164,7 @@ def main():
                             kw["arrowprops"].update({"connectionstyle": connectionstyle})
                             label_text = f"{plot_df.index[j]}: {plot_df[data_col][j]:.1f}%"
                             ax.annotate(label_text, xy=(x*1.2, y*1.2), xytext=(1.35*np.sign(x), 1.4*y),
-                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop)
+                                        horizontalalignment=horizontalalignment, **kw)
 
                     prop_title = fm.FontProperties(fname=font_path, size=32)
                     ax.set_title(question['title'], fontproperties=prop_title, pad=40)
