@@ -10,7 +10,7 @@ import os
 
 # --- 1. 字体安全加载逻辑 ---
 current_dir = os.path.dirname(__file__)
-FONT_FILENAME = 'Alibaba.ttf'  # 请确保 GitHub 上文件名完全一致
+FONT_FILENAME = 'AlibabaPuHuiTi-3-65-Medium.ttf'  # 请确保 GitHub 上文件名完全一致
 font_path = os.path.join(current_dir, FONT_FILENAME)
 
 if os.path.exists(font_path):
