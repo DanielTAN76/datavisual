@@ -47,28 +47,64 @@ def smart_wrap(text, width):
         lines.append(curr_line)
     return '\n'.join(lines)
 
+def try_parse_value(v):
+    """尝试将值解析为浮点数，自动处理百分号和逗号"""
+    if pd.isna(v): return None
+    s = str(v).strip().replace('%', '').replace(',', '')
+    if s == '': return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
 def parse_questions_new(df):
-    """解析交叉表数据"""
+    """解析交叉表数据，支持两种不同的数据格式并自动识别"""
     questions = []
+    # 确保至少有三列，不足三列的补齐以防止报错
+    if df.shape[1] < 3:
+        for i in range(df.shape[1], 3):
+            df[i] = np.nan
+            
     df_subset = df.iloc[:, [0, 1, 2]].copy()
     df_subset.columns = ['col_0', 'col_1', 'col_2']
+    
     curr_title, curr_opts = None, []
 
     for _, row in df_subset.iterrows():
-        q_num = str(row['col_0'])
-        is_new = pd.notna(pd.to_numeric(q_num, errors='coerce'))
-        if is_new and pd.notna(row['col_1']):
-            if curr_title and curr_opts:
-                questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-            curr_title, curr_opts = row['col_1'], []
-        elif curr_title and pd.notna(row['col_1']):
-            try:
-                val_str = str(row['col_2']).strip().replace('%', '')
-                val = float(val_str)
-                curr_opts.append([row['col_1'], val])
-            except: pass
+        c0 = row['col_0']
+        c1 = row['col_1']
+        c2 = row['col_2']
+        
+        c0_notna = pd.notna(c0) and str(c0).strip() != ''
+        val = try_parse_value(c2)
+        
+        if c0_notna:
+            # 模式1判断逻辑：A列是题号（数字），B列是标题，C列为空或非数值
+            is_num = pd.notna(pd.to_numeric(str(c0).strip(), errors='coerce'))
+            if is_num and val is None and pd.notna(c1) and str(c1).strip() != '':
+                # 进入模式1：保存上一题，开启新一题
+                if curr_title and curr_opts:
+                    questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+                curr_title = str(c1).strip()
+                curr_opts = []
+            else:
+                # 进入模式2：A列直接为标题，B列为选项，C列为数值
+                if curr_title and curr_opts:
+                    questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+                curr_title = str(c0).strip()
+                curr_opts = []
+                # 如果当前行的B列和C列有有效的选项和数值，则直接记录（对应标题和第一行数据在同行的情形）
+                if pd.notna(c1) and str(c1).strip() != '' and val is not None:
+                    curr_opts.append([str(c1).strip(), val])
+        else:
+            # A列为空时，属于当前题目的选项和数据行
+            if curr_title and pd.notna(c1) and str(c1).strip() != '' and val is not None:
+                curr_opts.append([str(c1).strip(), val])
+                
+    # 把最后一个题目追加进列表
     if curr_title and curr_opts:
         questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+        
     return questions
 
 def main():
