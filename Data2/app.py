@@ -172,19 +172,16 @@ def main():
                         labels = data['Option']
                         values = data['Value']
 
-                        # --- 核心修改：针对条形图自适应动态高度，防止标签拥挤 ---
-                        if ctype == "条形图":
-                            # 选项越多，高度越大；基础高度 7，每个选项额外提供 0.7 英寸的高度
-                            fig_height = max(7, 4 + len(labels) * 0.7)
-                            fig, ax = plt.subplots(figsize=(11, fig_height))
-                        else:
-                            fig, ax = plt.subplots(figsize=(11, 7))
+                        # --- 核心修改：将所有图表尺寸修改为一致的正方形 (10, 10) 英寸 ---
+                        # 移除了条形图的动态高度逻辑，以保证所有图表尺寸一致为正方形。
+                        fig, ax = plt.subplots(figsize=(10, 10))
 
                         ax.set_title(q['title'], fontproperties=prop_title, pad=20)
 
                         if ctype == "条形图":
                             wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
                             # 设置 height=0.5，让柱子变细，从而增加选项间的空白间距
+                            # 在固定的 10 英寸高度内，选项较多时可能会稍显拥挤。
                             bars = ax.barh(wrapped_labels, values, color='#4285F4', height=0.5)
                             ax.invert_yaxis()
                             
@@ -226,7 +223,7 @@ def main():
                                 pct_val = values.iloc[idx] if hasattr(values, 'iloc') else values[idx]
                                 opt_name = labels.iloc[idx] if hasattr(labels, 'iloc') else labels[idx]
                                 
-                                # --- 核心修改：组合选项名称和带括号的数据 ---
+                                # --- 组合选项名称和带括号的数据 ---
                                 label_text = f"{opt_name}（{pct_val:.1f}%）"
                                 # 允许最多换3行给饼图数据提供充足的展示空间
                                 wrapped_label = smart_wrap(label_text, 25, max_lines=3)
@@ -243,7 +240,7 @@ def main():
                             ax.legend(wedges, wrapped_legend_labels,
                                       loc="upper center", bbox_to_anchor=(0.5, -0.15),
                                       ncol=3, prop=prop, frameon=False)
-                            ax.axis('equal') 
+                            ax.axis('equal') # 保证饼图为正圆
 
                         plt.tight_layout()
                         
