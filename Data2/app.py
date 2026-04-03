@@ -123,9 +123,10 @@ def main():
             plt.rcParams['axes.unicode_minus'] = False
 
             # --- Ultimate Font Fix ---
-            font_path = '/System/Library/Fonts/STHeiti Medium.ttc'
+            font_path = './Data2/SourceHanSans 3.ttc'
             prop = fm.FontProperties(fname=font_path)
             prop_title = fm.FontProperties(fname=font_path, size=32)
+            prop_label = fm.FontProperties(fname=font_path, size=14)
 
             # Try both parsing formats
             parsed_questions = parse_format_A(df)
@@ -171,7 +172,7 @@ def main():
                         ax.invert_yaxis()
                         for bar in bars:
                             xval = bar.get_width()
-                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left', fontproperties=prop)
+                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left', fontproperties=prop_label)
                     
                     elif chart_type == "柱状图":
                         wrapped_labels = [smart_wrap(l, width=15) for l in labels]
@@ -181,7 +182,7 @@ def main():
                         ax.set_xlabel("", fontproperties=prop)
                         for bar in bars:
                             yval = bar.get_height()
-                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop)
+                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop_label)
 
                     elif chart_type == "饼图":
                         wedges, _ = ax.pie(plot_df[data_col], startangle=90, pctdistance=0.85, radius=1.2)
@@ -197,7 +198,7 @@ def main():
                             kw["arrowprops"].update({"connectionstyle": connectionstyle})
                             label_text = f"{plot_df.index[j]}: {plot_df[data_col][j]:.1f}%"
                             ax.annotate(label_text, xy=(x*1.2, y*1.2), xytext=(1.35*np.sign(x), 1.4*y),
-                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop)
+                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop_label)
 
                     ax.set_title(question['title'], fontproperties=prop_title, pad=40)
                     
