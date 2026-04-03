@@ -10,7 +10,7 @@ import os
 
 # --- 1. 字体安全加载逻辑 (保持最稳健版本) ---
 current_dir = os.path.dirname(__file__)
-FONT_FILENAME = 'Alibaba.ttf'  
+FONT_FILENAME = 'AlibabaPuHuiTi-3-65-Medium.ttf'  
 font_path = os.path.join(current_dir, FONT_FILENAME)
 
 # 初始化字体属性
