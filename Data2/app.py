@@ -8,24 +8,20 @@ import io
 import zipfile
 import os
 
-# --- 1. 字体安全加载逻辑 (保持最稳健版本) ---
+# --- 1. 字体安全加载逻辑 ---
 current_dir = os.path.dirname(__file__)
 FONT_FILENAME = 'AlibabaPuHuiTi-3-65-Medium.ttf'  
 font_path = os.path.join(current_dir, FONT_FILENAME)
 
-# 初始化字体属性
 prop = fm.FontProperties(size=12)
 prop_title = fm.FontProperties(size=18)
-font_available = False
 
 if os.path.exists(font_path):
     try:
-        # 仅尝试加载，不调用 get_name() 防止 0x55 崩溃
         prop = fm.FontProperties(fname=font_path, size=12)
         prop_title = fm.FontProperties(fname=font_path, size=18)
-        font_available = True
-    except Exception as e:
-        st.error(f"字体加载失败: {e}。将使用系统默认字体。")
+    except:
+        st.error("字体文件加载异常，请检查 Alibaba.ttf 是否完整。")
 
 plt.rcParams['axes.unicode_minus'] = False 
 
@@ -45,128 +41,125 @@ def smart_wrap(text, width):
         lines.append(curr_line)
     return '\n'.join(lines)
 
-# --- 内部解析器 A：题号模式 ---
-def _parse_by_id(df):
+# --- 核心：全自动智能解析器 ---
+def smart_parse_data(df):
     questions = []
-    df_subset = df.iloc[:, [0, 1, 2]].copy()
-    df_subset.columns = ['col_0', 'col_1', 'col_2']
-    curr_title, curr_opts = None, []
-    for _, row in df_subset.iterrows():
-        q_num = str(row['col_0'])
-        is_new = pd.notna(pd.to_numeric(q_num, errors='coerce'))
-        if is_new and pd.notna(row['col_1']):
-            if curr_title and curr_opts:
-                questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-            curr_title, curr_opts = row['col_1'], []
-        elif curr_title and pd.notna(row['col_1']):
-            try:
-                val = float(str(row['col_2']).strip().replace('%', ''))
-                curr_opts.append([row['col_1'], val])
-            except: pass
-    if curr_title and curr_opts:
-        questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-    return questions
+    curr_title = None
+    curr_opts = []
 
-# --- 内部解析器 B：题目模式 ---
-def _parse_by_title(df):
-    questions = []
-    curr_title, curr_opts = None, []
-    for _, row in df.iterrows():
-        col0, col1, col2 = row[0], row[1], row[2]
-        if pd.notna(col0) and str(col0).strip() != "":
+    # 预处理：删除全空行
+    df = df.dropna(how='all').reset_index(drop=True)
+
+    for i, row in df.iterrows():
+        # 读取前三列，转换为字符串并去空格
+        s0 = str(row[0]).strip() if pd.notna(row[0]) else ""
+        s1 = str(row[1]).strip() if pd.notna(row[1]) else ""
+        s2 = str(row[2]).strip() if pd.notna(row[2]) else ""
+
+        # 尝试解析第三列数值
+        val = None
+        try:
+            val = float(s2.replace('%', '').strip())
+        except:
+            pass
+
+        # --- 判定逻辑：是否是新题目开始 ---
+        is_new_q = False
+        detected_title = ""
+        first_opt = None
+
+        if s0 != "":
+            # A列不为空。我们要区分它是“题号”还是“题目文本”。
+            # 规则1：如果A列很短（<=5位）且B列不为空，通常A是题号，B是题目
+            if len(s0) <= 6 and s1 != "" and val is None:
+                is_new_q = True
+                detected_title = s1
+            # 规则2：如果A列内容较长，通常A直接就是题目（如 HK客群文件）
+            elif len(s0) > 1:
+                is_new_q = True
+                detected_title = s0
+                # 如果这一行 B、C 列已经有数据了，说明题目和第一项在同一行
+                if s1 != "" and val is not None:
+                    first_opt = [s1, val]
+
+        # 如果判定为新题，保存旧题，开启新题
+        if is_new_q:
             if curr_title and curr_opts:
                 questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-            curr_title = str(col0).strip()
+            curr_title = detected_title
             curr_opts = []
-        if curr_title and pd.notna(col1):
-            try:
-                val = float(str(col2).strip().replace('%', ''))
-                curr_opts.append([str(col1), val])
-            except: pass
+            if first_opt:
+                curr_opts.append(first_opt)
+        else:
+            # 如果不是新题，且当前已经有题目在处理中，则视为添加选项
+            if curr_title and s1 != "" and val is not None:
+                # 排除掉一些干扰项（如选项也叫“Total”等）
+                if s1.lower() not in ['total', '合计', 'nan']:
+                    curr_opts.append([s1, val])
+
+    # 保存最后一题
     if curr_title and curr_opts:
         questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-    return questions
-
-# --- 核心：自动识别模式逻辑 ---
-def auto_parse_file(df):
-    # 获取 A 列前 10 个非空值进行分析
-    sample_a = df[0].dropna().head(10).astype(str).tolist()
-    if not sample_a:
-        return []
-
-    # 检查 A 列样本是否主要是纯数字
-    numeric_count = 0
-    for val in sample_a:
-        if pd.to_numeric(val, errors='coerce') is not None:
-            numeric_count += 1
     
-    # 启发式规则：如果超过一半的非空单元格是数字，认为是题号模式
-    if numeric_count / len(sample_a) > 0.5:
-        st.toast("🤖 检测到【题号模式】数据布局")
-        return _parse_by_id(df)
-    else:
-        st.toast("🤖 检测到【题目模式】数据布局")
-        return _parse_by_title(df)
+    return questions
 
 def main():
     st.set_page_config(page_title="全自动数据可视化", layout="wide")
-    st.title("📊 全自动交叉表分析工具")
-    
+    st.title("📊 智能数据分析工具")
+    st.caption("支持格式：A列题号+B列题目 或 A列直接为题目文本")
+
     uploaded_file = st.file_uploader("上传您的 Excel 或 CSV 文件", type=["csv", "xlsx", "xls"])
 
     if uploaded_file:
         try:
             # 读取数据
             if uploaded_file.name.endswith('.csv'):
-                df = pd.read_csv(uploaded_file, header=None)
+                # 尝试多种编码防止乱码
+                try:
+                    df = pd.read_csv(uploaded_file, header=None, encoding='utf-8')
+                except:
+                    df = pd.read_csv(uploaded_file, header=None, encoding='gbk')
             else:
                 df = pd.read_excel(uploaded_file, header=None)
             
-            # 自动识别并解析
-            with st.spinner('正在智能分析数据结构...'):
-                parsed_questions = auto_parse_file(df)
+            # 执行智能解析
+            with st.spinner('正在分析数据布局...'):
+                parsed_questions = smart_parse_data(df)
 
             if not parsed_questions:
-                st.error("未能识别出题目，请确保 A 列为题号或题目，B 列为选项，C 列为数据。")
+                st.error("未能识别出题目内容。请检查文件第一列是否包含题号或题目。")
+                with st.expander("查看原始数据预览"):
+                    st.write(df.head(10))
             else:
-                st.success(f"自动识别成功！共找到 {len(parsed_questions)} 个题目")
+                st.success(f"🤖 自动识别成功：共找到 {len(parsed_questions)} 个有效题目")
                 
                 charts_for_export = []
                 for i, q in enumerate(parsed_questions):
                     st.divider()
                     c1, c2 = st.columns([1, 3])
                     with c1:
-                        st.write(f"**Q{i+1}:**")
-                        st.write(q['title'])
-                        ctype = st.selectbox(f"选择图表类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
+                        st.write(f"**Q{i+1}:** {q['title']}")
+                        ctype = st.selectbox(f"图表类型", ["条形图", "柱状图", "饼图"], key=f"c_{i}")
                     
                     with c2:
                         fig, ax = plt.subplots(figsize=(11, 7))
                         ax.set_title(q['title'], fontproperties=prop_title, pad=25)
                         
                         data = q['data']
-                        if data.empty:
-                            st.warning("该题目无有效数据")
-                            continue
-
                         if ctype == "条形图":
-                            wrapped_labels = [smart_wrap(l, 35) for l in data['Option']]
-                            bars = ax.barh(wrapped_labels, data['Value'], color='#4285F4')
+                            labels = [smart_wrap(l, 30) for l in data['Option']]
+                            bars = ax.barh(labels, data['Value'], color='#4285F4')
                             ax.invert_yaxis()
-                            # 彻底解决乱码
-                            for t in ax.get_yticklabels(): t.set_fontproperties(prop)
-                            for t in ax.get_xticklabels(): t.set_fontproperties(prop)
-                            # 解决溢出
-                            ax.set_xlim(0, max(data['Value']) * 1.15)
+                            for t in ax.get_yticklabels() + ax.get_xticklabels(): t.set_fontproperties(prop)
+                            ax.set_xlim(0, max(data['Value']) * 1.15 if not data['Value'].empty else 100)
                             for bar in bars:
                                 ax.text(bar.get_width(), bar.get_y()+bar.get_height()/2, f" {bar.get_width():.1f}%", va='center', fontproperties=prop)
                         
                         elif ctype == "柱状图":
-                            wrapped_labels = [smart_wrap(l, 12) for l in data['Option']]
-                            bars = ax.bar(wrapped_labels, data['Value'], color='#34A853')
-                            for t in ax.get_xticklabels(): t.set_fontproperties(prop)
-                            for t in ax.get_yticklabels(): t.set_fontproperties(prop)
-                            ax.set_ylim(0, max(data['Value']) * 1.15)
+                            labels = [smart_wrap(l, 12) for l in data['Option']]
+                            bars = ax.bar(labels, data['Value'], color='#34A853')
+                            for t in ax.get_xticklabels() + ax.get_yticklabels(): t.set_fontproperties(prop)
+                            ax.set_ylim(0, max(data['Value']) * 1.15 if not data['Value'].empty else 100)
                             for bar in bars:
                                 ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f"{bar.get_height():.1f}%", va='bottom', ha='center', fontproperties=prop)
                         
@@ -183,18 +176,16 @@ def main():
                         plt.close(fig)
 
                 if charts_for_export:
-                    st.divider()
                     zip_buf = io.BytesIO()
                     with zipfile.ZipFile(zip_buf, "a") as f:
                         for c in charts_for_export:
                             c['buffer'].seek(0)
-                            # 导出文件名安全处理
                             safe_name = "".join([x for x in c['title'] if x.isalnum() or x in (' ', '_')])[:25]
                             f.writestr(f"{safe_name}.png", c['buffer'].read())
-                    st.download_button("📥 一键下载所有图表", zip_buf.getvalue(), "all_charts.zip")
+                    st.download_button("📥 打包下载所有图表", zip_buf.getvalue(), "all_charts.zip")
 
         except Exception as e:
-            st.error(f"运行出错: {e}")
+            st.error(f"解析过程中发生错误: {e}")
 
 if __name__ == "__main__":
     main()
