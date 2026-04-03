@@ -1,11 +1,13 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.subplots as plt
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
 import io
 import zipfile
 import os
+import re
 
 # --- 1. 字体安全加载逻辑 ---
 current_dir = os.path.dirname(__file__)
@@ -30,39 +32,43 @@ plt.rcParams['axes.unicode_minus'] = False
 def smart_wrap(text, width, max_lines=2):
     """
     针对中英文混合文本的自动换行与截断逻辑。
-    如果行数超过 max_lines，则在最后一行末尾加上 '...' 并且截断后续文本。
+    使用正则分词，确保英文单词按完整的单词换行，不被强行拆断。
     """
     text = str(text)
     lines = []
     for para in text.split('\n'):
+        # 将文本拆分为：英文/数字组合、中文字符、其他符号
+        tokens = re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]|.', para)
         curr_line, curr_width = '', 0
-        for char in para:
-            w = 2 if '\u4e00' <= char <= '\u9fff' else 1
-            if curr_width + w > width:
-                lines.append(curr_line)
-                curr_line, curr_width = char, w
+        
+        for token in tokens:
+            # 判断当前 token 宽度（中文占2，其余视长度而定）
+            w = 2 if re.match(r'[\u4e00-\u9fff]', token) else len(token)
+            
+            # 如果当前行加上新 token 超过宽度，且当前行非空，则换行
+            if curr_width + w > width and curr_width > 0:
+                if curr_line.strip():
+                    lines.append(curr_line.strip())
+                curr_line = token.lstrip() # 新行不以空格开头
+                curr_width = len(curr_line) if not re.match(r'[\u4e00-\u9fff]', token) else (2 if curr_line else 0)
             else:
-                curr_line += char
+                curr_line += token
                 curr_width += w
-        lines.append(curr_line)
-    
-    # 判断是否超过允许的最大行数
+                
+        if curr_line.strip():
+            lines.append(curr_line.strip())
+            
+    # 超过指定行数则截断并增加 "..."
     if len(lines) > max_lines:
         last_line = lines[max_lines - 1]
-        # 预留空间加省略号
-        if len(last_line) > 1:
-            lines[max_lines - 1] = last_line[:-1] + "..."
-        else:
-            lines[max_lines - 1] = last_line + "..."
+        lines[max_lines - 1] = last_line + "..."
         return '\n'.join(lines[:max_lines])
     return '\n'.join(lines)
 
 def try_parse_value(v):
-    """尝试将值解析为浮点数，自动处理百分号和逗号，排除无用字符"""
     if pd.isna(v): return None
     s = str(v).strip().replace('%', '').replace(',', '')
     if s == '': return None
-    # 过滤掉标题行中可能存在的 'Total' 等干扰字样
     if s.lower() in ['total', 'nan', 'none']: return None
     try:
         return float(s)
@@ -70,7 +76,6 @@ def try_parse_value(v):
         return None
 
 def is_question_number(s):
-    """辅助判断是否为纯数字或带少量修饰的题号"""
     s = str(s).strip()
     if not s: return False
     if len(s) <= 5 and any(c.isdigit() for c in s):
@@ -164,17 +169,24 @@ def main():
                         ctype = st.selectbox(f"选择类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
                     
                     with col2:
-                        fig, ax = plt.subplots(figsize=(11, 7))
-                        ax.set_title(q['title'], fontproperties=prop_title, pad=20)
-                        
                         data = q['data']
                         labels = data['Option']
                         values = data['Value']
 
+                        # --- 核心修改：针对条形图自适应动态高度，防止标签拥挤 ---
                         if ctype == "条形图":
-                            # 默认限制为两行
-                            wrapped_labels = [smart_wrap(l, 35) for l in labels]
-                            bars = ax.barh(wrapped_labels, values, color='#4285F4')
+                            # 选项越多，高度越大；基础高度 7，每个选项额外提供 0.7 英寸的高度
+                            fig_height = max(7, 4 + len(labels) * 0.7)
+                            fig, ax = plt.subplots(figsize=(11, fig_height))
+                        else:
+                            fig, ax = plt.subplots(figsize=(11, 7))
+
+                        ax.set_title(q['title'], fontproperties=prop_title, pad=20)
+
+                        if ctype == "条形图":
+                            wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
+                            # 设置 height=0.5，让柱子变细，从而增加选项间的空白间距
+                            bars = ax.barh(wrapped_labels, values, color='#4285F4', height=0.5)
                             ax.invert_yaxis()
                             
                             for t in ax.get_yticklabels(): t.set_fontproperties(prop)
@@ -188,8 +200,7 @@ def main():
                                         va='center', fontproperties=prop)
                         
                         elif ctype == "柱状图":
-                            # 默认限制为两行
-                            wrapped_labels = [smart_wrap(l, 12) for l in labels]
+                            wrapped_labels = [smart_wrap(l, 12, max_lines=2) for l in labels]
                             bars = ax.bar(wrapped_labels, values, color='#34A853')
                             
                             for t in ax.get_xticklabels(): t.set_fontproperties(prop)
@@ -200,10 +211,8 @@ def main():
                                         va='bottom', ha='center', fontproperties=prop)
                         
                         elif ctype == "饼图":
-                            # 绘制基础纯色块饼图，无内部文字
                             wedges, texts = ax.pie(values, startangle=90, radius=1.0)
                             
-                            # 定义连接引线的样式
                             kw = dict(arrowprops=dict(arrowstyle="-", color="#666666", lw=1.2),
                                       zorder=0, va="center", fontproperties=prop)
                             
@@ -212,26 +221,30 @@ def main():
                                 y = np.sin(np.deg2rad(ang))
                                 x = np.cos(np.deg2rad(ang))
                                 
-                                # 判断处于圆盘左侧还是右侧
                                 sign_x = 1 if x >= 0 else -1
                                 horizontalalignment = "left" if sign_x == 1 else "right"
                                 
                                 pct_val = values.iloc[idx] if hasattr(values, 'iloc') else values[idx]
-                                pct_str = f"{pct_val:.1f}%"
+                                opt_name = labels.iloc[idx] if hasattr(labels, 'iloc') else labels[idx]
                                 
-                                # 使用 annotate 绘制线段及百分比标记，稍微向外扩展
-                                ax.annotate(pct_str, 
+                                # --- 核心修改：组合选项名称和带括号的数据 ---
+                                label_text = f"{opt_name}（{pct_val:.1f}%）"
+                                # 允许最多换3行给饼图数据提供充足的展示空间
+                                wrapped_label = smart_wrap(label_text, 25, max_lines=3)
+                                
+                                # 将引导线推远到 1.35 避免拥挤
+                                ax.annotate(wrapped_label, 
                                             xy=(x, y), 
-                                            xytext=(1.25 * sign_x, 1.25 * y),
+                                            xytext=(1.35 * sign_x, 1.35 * y),
                                             horizontalalignment=horizontalalignment, 
                                             **kw)
                             
-                            # 底部增加统一的图例 (Legend)，文字超长同样会被控制在两行
-                            wrapped_legend_labels = [smart_wrap(l, 20) for l in labels]
+                            # 底部图例框向下调整一点避免重叠
+                            wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
                             ax.legend(wedges, wrapped_legend_labels,
-                                      loc="upper center", bbox_to_anchor=(0.5, -0.05),
+                                      loc="upper center", bbox_to_anchor=(0.5, -0.15),
                                       ncol=3, prop=prop, frameon=False)
-                            ax.axis('equal') # 保证饼图为正圆
+                            ax.axis('equal') 
 
                         plt.tight_layout()
                         
