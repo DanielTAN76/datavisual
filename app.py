@@ -104,7 +104,8 @@ def main():
                 st.header("2. 数据可视化")
 
                 font_path = '/System/Library/Fonts/STHeiti Medium.ttc'
-                prop = fm.FontProperties(fname=font_path)
+                prop = fm.FontProperties(fname=font_path, size=14)
+                prop_title = fm.FontProperties(fname=font_path, size=32)
                 
                 charts_for_export = []
 
