@@ -28,44 +28,9 @@ def smart_wrap(text, width):
 
 
 
-def parse_format_A(df):
-    # Format A: Column A has question, B has options, C has data
+def parse_questions_new(df):
     questions = []
-    df_subset = df.iloc[:, [0, 1, 2]].copy()
-    df_subset.columns = ['col_0', 'col_1', 'col_2']
-
-    current_question_title = None
-    current_question_options = []
-
-    for index, row in df_subset.iterrows():
-        q_title_candidate = row['col_0']
-        option_text = row['col_1']
-        data_value = row['col_2']
-
-        if pd.notna(q_title_candidate):
-            if current_question_title and current_question_options:
-                options_df = pd.DataFrame(current_question_options, columns=['Option', 'Value'])
-                questions.append({"title": current_question_title, "data": options_df})
-            
-            current_question_title = q_title_candidate
-            current_question_options = []
-
-        elif current_question_title and pd.isna(q_title_candidate) and pd.notna(option_text) and pd.notna(data_value):
-            try:
-                cleaned_value = float(str(data_value).strip().replace('%', ''))
-                current_question_options.append([option_text, cleaned_value])
-            except (ValueError, AttributeError):
-                pass
-
-    if current_question_title and current_question_options:
-        options_df = pd.DataFrame(current_question_options, columns=['Option', 'Value'])
-        questions.append({"title": current_question_title, "data": options_df})
-        
-    return questions
-
-def parse_format_B(df):
-    # Format B: Column A has Q#/option#, B has question/option text, C has data
-    questions = []
+    # Use the first three columns, renaming them for clarity
     df_subset = df.iloc[:, [0, 1, 2]].copy()
     df_subset.columns = ['col_0', 'col_1', 'col_2']
 
@@ -75,26 +40,33 @@ def parse_format_B(df):
     for index, row in df_subset.iterrows():
         q_num = str(row['col_0'])
         q_text = row['col_1']
-        data_value = row['col_2']
-
+        
+        # Heuristic: A new question starts with a numeric-like value in the first column.
         is_new_question = pd.notna(pd.to_numeric(q_num, errors='coerce'))
 
         if is_new_question and pd.notna(q_text):
+            # If we were processing a previous question, save it first.
             if current_question_title and current_question_options:
                 options_df = pd.DataFrame(current_question_options, columns=['Option', 'Value'])
                 questions.append({"title": current_question_title, "data": options_df})
             
+            # Start the new question
             current_question_title = q_text
             current_question_options = []
         
-        elif current_question_title and not is_new_question and pd.notna(q_text) and pd.notna(data_value):
+        # Heuristic: An option row has a non-numeric value in col_0 and some text in col_1
+        elif current_question_title and pd.notna(q_text):
             option_label = q_text
+            data_value_raw = str(row['col_2'])
+            
             try:
-                cleaned_value = float(str(data_value).strip().replace('%', ''))
-                current_question_options.append([option_label, cleaned_value])
+                # Clean the data value (e.g., '1%' -> 1.0)
+                data_value = float(data_value_raw.strip().replace('%', ''))
+                current_question_options.append([option_label, data_value])
             except (ValueError, AttributeError):
-                pass
+                pass # Ignore rows where data conversion fails
 
+    # Add the very last question being processed
     if current_question_title and current_question_options:
         options_df = pd.DataFrame(current_question_options, columns=['Option', 'Value'])
         questions.append({"title": current_question_title, "data": options_df})
@@ -122,24 +94,19 @@ def main():
             import matplotlib.font_manager as fm
             plt.rcParams['axes.unicode_minus'] = False
 
-            # --- Ultimate Font Fix ---
-            font_path = './Data2/SourceHanSans 3.ttc'
-            prop = fm.FontProperties(fname=font_path)
-            prop_title = fm.FontProperties(fname=font_path, size=32)
-            prop_label = fm.FontProperties(fname=font_path, size=14)
-
-            # Try both parsing formats
-            parsed_questions = parse_format_A(df)
-            if not parsed_questions:
-                parsed_questions = parse_format_B(df)
+            parsed_questions = parse_questions_new(df)
 
             if not parsed_questions:
                 st.warning("无法自动识别出任何问题。")
-                st.info("无法识别您的文件格式。请确保文件格式符合以下两种格式之一：\n1. A列为问题，B列为选项，C列为数据。\n2. A列为题号/选项号，B列为问题/选项，C列为数据。")
+                st.info("请确保您的文件格式符合预期：第一列为题号，第二列为题目/选项，第三列为数据。")
             else:
                 st.success(f"成功识别出 {len(parsed_questions)} 个问题！")
                 st.header("2. 数据可视化")
 
+                font_path = '/System/Library/Fonts/STHeiti Medium.ttc'
+                prop = fm.FontProperties(fname=font_path, size=14)
+                prop_title = fm.FontProperties(fname=font_path, size=32)
+                
                 charts_for_export = []
 
                 for i, question in enumerate(parsed_questions):
@@ -172,7 +139,7 @@ def main():
                         ax.invert_yaxis()
                         for bar in bars:
                             xval = bar.get_width()
-                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left', fontproperties=prop_label)
+                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left', fontproperties=prop)
                     
                     elif chart_type == "柱状图":
                         wrapped_labels = [smart_wrap(l, width=15) for l in labels]
@@ -182,7 +149,7 @@ def main():
                         ax.set_xlabel("", fontproperties=prop)
                         for bar in bars:
                             yval = bar.get_height()
-                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop_label)
+                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop)
 
                     elif chart_type == "饼图":
                         wedges, _ = ax.pie(plot_df[data_col], startangle=90, pctdistance=0.85, radius=1.2)
@@ -198,8 +165,9 @@ def main():
                             kw["arrowprops"].update({"connectionstyle": connectionstyle})
                             label_text = f"{plot_df.index[j]}: {plot_df[data_col][j]:.1f}%"
                             ax.annotate(label_text, xy=(x*1.2, y*1.2), xytext=(1.35*np.sign(x), 1.4*y),
-                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop_label)
+                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop)
 
+                    prop_title = fm.FontProperties(fname=font_path, size=32)
                     ax.set_title(question['title'], fontproperties=prop_title, pad=40)
                     
                     for label in ax.get_xticklabels() + ax.get_yticklabels():
