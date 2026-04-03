@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
 import matplotlib.font_manager as fm
 import io
 import zipfile
@@ -16,7 +15,6 @@ font_path = os.path.join(current_dir, FONT_FILENAME)
 
 # 初始化字体属性，防止解析元数据崩溃
 if os.path.exists(font_path):
-    # 直接定位文件路径，不调用 get_name() 避免 FT2Font 报错
     prop = fm.FontProperties(fname=font_path, size=12)
     prop_title = fm.FontProperties(fname=font_path, size=18)
     font_available = True
@@ -36,7 +34,6 @@ def smart_wrap(text, width):
     for para in text.split('\n'):
         curr_line, curr_width = '', 0
         for char in para:
-            # 判断是否为中文字符
             w = 2 if '\u4e00' <= char <= '\u9fff' else 1
             if curr_width + w > width:
                 lines.append(curr_line)
@@ -48,19 +45,30 @@ def smart_wrap(text, width):
     return '\n'.join(lines)
 
 def try_parse_value(v):
-    """尝试将值解析为浮点数，自动处理百分号和逗号"""
+    """尝试将值解析为浮点数，自动处理百分号和逗号，排除无用字符"""
     if pd.isna(v): return None
     s = str(v).strip().replace('%', '').replace(',', '')
     if s == '': return None
+    # 过滤掉标题行中可能存在的 'Total' 等干扰字样
+    if s.lower() in ['total', 'nan', 'none']: return None
     try:
         return float(s)
     except ValueError:
         return None
 
+def is_question_number(s):
+    """辅助判断是否为纯数字或带少量修饰的题号（例如 1, 2, Q1 等）"""
+    s = str(s).strip()
+    if not s: return False
+    # 题号通常很短且包含数字
+    if len(s) <= 5 and any(c.isdigit() for c in s):
+        return True
+    return False
+
 def parse_questions_new(df):
-    """解析交叉表数据，支持两种不同的数据格式并自动识别"""
+    """解析交叉表数据，支持三种不同的数据格式并自动识别"""
     questions = []
-    # 确保至少有三列，不足三列的补齐以防止报错
+    # 确保至少有三列，不足三列的补齐
     if df.shape[1] < 3:
         for i in range(df.shape[1], 3):
             df[i] = np.nan
@@ -69,39 +77,55 @@ def parse_questions_new(df):
     df_subset.columns = ['col_0', 'col_1', 'col_2']
     
     curr_title, curr_opts = None, []
-
+    
     for _, row in df_subset.iterrows():
-        c0 = row['col_0']
-        c1 = row['col_1']
-        c2 = row['col_2']
+        c0 = str(row['col_0']).strip() if pd.notna(row['col_0']) else ''
+        if c0.lower() == 'nan': c0 = ''
         
-        c0_notna = pd.notna(c0) and str(c0).strip() != ''
+        c1 = str(row['col_1']).strip() if pd.notna(row['col_1']) else ''
+        if c1.lower() == 'nan': c1 = ''
+        
+        c2 = row['col_2']
         val = try_parse_value(c2)
         
-        if c0_notna:
-            # 模式1判断逻辑：A列是题号（数字），B列是标题，C列为空或非数值
-            is_num = pd.notna(pd.to_numeric(str(c0).strip(), errors='coerce'))
-            if is_num and val is None and pd.notna(c1) and str(c1).strip() != '':
-                # 进入模式1：保存上一题，开启新一题
-                if curr_title and curr_opts:
-                    questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-                curr_title = str(c1).strip()
-                curr_opts = []
-            else:
-                # 进入模式2：A列直接为标题，B列为选项，C列为数值
-                if curr_title and curr_opts:
-                    questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
-                curr_title = str(c0).strip()
-                curr_opts = []
-                # 如果当前行的B列和C列有有效的选项和数值，则直接记录（对应标题和第一行数据在同行的情形）
-                if pd.notna(c1) and str(c1).strip() != '' and val is not None:
-                    curr_opts.append([str(c1).strip(), val])
-        else:
-            # A列为空时，属于当前题目的选项和数据行
-            if curr_title and pd.notna(c1) and str(c1).strip() != '' and val is not None:
-                curr_opts.append([str(c1).strip(), val])
+        c0_notna = bool(c0)
+        c1_notna = bool(c1)
+        
+        if not c0_notna and not c1_notna:
+            continue
+            
+        # 模式 1 / 模式 3 标题判断：A列是题号（1, Q1等），B列是标题，C列数据不管
+        if c0_notna and is_question_number(c0) and c1_notna:
+            if curr_title and curr_opts:
+                questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+            curr_title = c1
+            curr_opts = []
+            
+        # 模式 3 选项判断：A列是字母（a, b, c），B列是选项，C列是百分比
+        elif c0_notna and len(c0) <= 2 and c0.isalpha() and c1_notna and val is not None:
+            if curr_title:
+                curr_opts.append([c1, val])
                 
-    # 把最后一个题目追加进列表
+        # 模式 2 标题判断：A列很长且为标题内容，B列是选项，C列是百分比
+        elif c0_notna and c1_notna and val is not None:
+            if curr_title and curr_opts:
+                questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+            curr_title = c0
+            curr_opts = [[c1, val]]
+            
+        # 常规选项判断：A列为空，B列为选项，C列为百分比
+        elif not c0_notna and c1_notna and val is not None:
+            if curr_title:
+                curr_opts.append([c1, val])
+                
+        # 兜底情况：A列有文本，但B列和C列为空，那可能A列是一行纯标题
+        elif c0_notna and not c1_notna and val is None:
+             if curr_title and curr_opts:
+                 questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+             curr_title = c0
+             curr_opts = []
+
+    # 追加最后一题
     if curr_title and curr_opts:
         questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
         
@@ -131,7 +155,6 @@ def main():
                 
                 charts_for_export = []
                 
-                # 遍历生成的图表
                 for i, q in enumerate(parsed_questions):
                     st.divider()
                     col1, col2 = st.columns([1, 3])
@@ -142,10 +165,7 @@ def main():
                         ctype = st.selectbox(f"选择类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
                     
                     with col2:
-                        # --- 修改 1：稍微增加figsize宽度和高度，优化布局 ---
                         fig, ax = plt.subplots(figsize=(11, 7))
-                        
-                        # 显式应用标题字体
                         ax.set_title(q['title'], fontproperties=prop_title, pad=20)
                         
                         data = q['data']
@@ -153,23 +173,14 @@ def main():
                         values = data['Value']
 
                         if ctype == "条形图":
-                            # --- 修改 2：调整换行宽度以适应新布局 ---
                             wrapped_labels = [smart_wrap(l, 35) for l in labels]
                             bars = ax.barh(wrapped_labels, values, color='#4285F4')
                             ax.invert_yaxis()
                             
-                            # --- 核心修改 3：显式应用中文字体到坐标轴刻度标签 ---
-                            # 设置y轴刻度标签字体
-                            for t in ax.get_yticklabels(): 
-                                t.set_fontproperties(prop)
-                            
-                            # 设置x轴刻度标签字体
-                            for t in ax.get_xticklabels(): 
-                                t.set_fontproperties(prop)
+                            for t in ax.get_yticklabels(): t.set_fontproperties(prop)
+                            for t in ax.get_xticklabels(): t.set_fontproperties(prop)
 
-                            # --- 核心修改 4：处理文本溢出：手动增加 x 轴范围以预留空白空间 ---
                             max_val = max(values) if not values.empty else 100
-                            # 预留 15% 的空白空间给最长的条形图和数据标签
                             ax.set_xlim(0, max_val * 1.15) 
                             
                             for bar in bars:
@@ -180,7 +191,6 @@ def main():
                             wrapped_labels = [smart_wrap(l, 12) for l in labels]
                             bars = ax.bar(wrapped_labels, values, color='#34A853')
                             
-                            # --- 修改：柱状图也应用坐标轴刻度字体 ---
                             for t in ax.get_xticklabels(): t.set_fontproperties(prop)
                             for t in ax.get_yticklabels(): t.set_fontproperties(prop)
                             
@@ -190,23 +200,17 @@ def main():
                         
                         elif ctype == "饼图":
                             wedges, texts, autotexts = ax.pie(values, labels=labels, autopct='%1.1f%%', startangle=90)
-                            # 饼图特殊处理：手动设置每一个文本对象的字体
                             plt.setp(texts, fontproperties=prop)
                             plt.setp(autotexts, fontproperties=prop, color='white')
 
-                        # fig.subplots_adjust 可选项：如果tight_layout还是溢出，可以手动调整
-                        # fig.subplots_adjust(left=0.2, right=0.85) 
-
                         plt.tight_layout()
                         
-                        # 转为图片显示
                         buf = io.BytesIO()
                         fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
                         st.image(buf)
                         charts_for_export.append({"title": q['title'], "buffer": buf})
                         plt.close(fig)
 
-                # 下载区域
                 if charts_for_export:
                     st.divider()
                     zip_buf = io.BytesIO()
