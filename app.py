@@ -172,8 +172,8 @@ def main():
                         labels = data['Option']
                         values = data['Value']
 
-                        # --- 核心修改 1：移除条形图的动态高度，强制使用固定 figsize ---
-                        fig, ax = plt.subplots(figsize=(12, 8))
+                        # --- 核心修改：将画布尺寸强制设置为 1:1 的正方形，这里使用 10x10 ---
+                        fig, ax = plt.subplots(figsize=(10, 10))
 
                         ax.set_title(q['title'], fontproperties=prop_title, pad=20)
 
@@ -235,11 +235,11 @@ def main():
                                       ncol=3, prop=prop, frameon=False)
                             ax.axis('equal') 
 
-                        # 调整内部边距，让内容去适应设定的 12x8 画布
+                        # 调整内部边距，让内容去适应设定的 10x10 画布
                         plt.tight_layout()
                         
                         buf = io.BytesIO()
-                        # --- 核心修改 2：去除 bbox_inches="tight"，这是保证像素绝对一致的关键所在 ---
+                        # 没有 bbox_inches="tight"，保证外框比例完全由 figsize 决定
                         fig.savefig(buf, format="png", dpi=150)
                         st.image(buf)
                         charts_for_export.append({"title": q['title'], "buffer": buf})
