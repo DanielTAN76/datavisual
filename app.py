@@ -1,208 +1,263 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.ticker import FuncFormatter
-import textwrap
+import matplotlib.font_manager as fm
 import io
 import zipfile
+import os
+import re
 
-def smart_wrap(text, width):
+# --- 1. 字体安全加载逻辑 ---
+current_dir = os.path.dirname(__file__)
+# 请确保你上传到 GitHub 的字体文件名叫 Alibaba.ttf
+FONT_FILENAME = 'AlibabaPuHuiTi-3-65-Medium.ttf'  
+font_path = os.path.join(current_dir, FONT_FILENAME)
+
+# 初始化字体属性，防止解析元数据崩溃
+if os.path.exists(font_path):
+    prop = fm.FontProperties(fname=font_path, size=12)
+    prop_title = fm.FontProperties(fname=font_path, size=18)
+    font_available = True
+else:
+    st.warning(f"⚠️ 未找到字体文件 {FONT_FILENAME}，将使用系统默认字体（中文可能乱码）。")
+    prop = fm.FontProperties(size=12)
+    prop_title = fm.FontProperties(size=18)
+    font_available = False
+
+# 解决负号显示问题
+plt.rcParams['axes.unicode_minus'] = False 
+
+def smart_wrap(text, width, max_lines=2):
+    """
+    针对中英文混合文本的自动换行与截断逻辑。
+    使用正则分词，确保英文单词按完整的单词换行，不被强行拆断。
+    """
+    text = str(text)
     lines = []
     for para in text.split('\n'):
-        current_line = ''
-        current_width = 0
-        for char in para:
-            # Heuristic: CJK characters are roughly twice as wide as ASCII
-            char_width = 2 if '\u4e00' <= char <= '\u9fff' else 1
-            if current_width + char_width > width:
-                lines.append(current_line)
-                current_line = char
-                current_width = char_width
+        # 将文本拆分为：英文/数字组合、中文字符、其他符号
+        tokens = re.findall(r'[a-zA-Z0-9]+|[\u4e00-\u9fff]|.', para)
+        curr_line, curr_width = '', 0
+        
+        for token in tokens:
+            # 判断当前 token 宽度（中文占2，其余视长度而定）
+            w = 2 if re.match(r'[\u4e00-\u9fff]', token) else len(token)
+            
+            # 如果当前行加上新 token 超过宽度，且当前行非空，则换行
+            if curr_width + w > width and curr_width > 0:
+                if curr_line.strip():
+                    lines.append(curr_line.strip())
+                curr_line = token.lstrip() # 新行不以空格开头
+                curr_width = len(curr_line) if not re.match(r'[\u4e00-\u9fff]', token) else (2 if curr_line else 0)
             else:
-                current_line += char
-                current_width += char_width
-        lines.append(current_line)
+                curr_line += token
+                curr_width += w
+                
+        if curr_line.strip():
+            lines.append(curr_line.strip())
+            
+    # 超过指定行数则截断并增加 "..."
+    if len(lines) > max_lines:
+        last_line = lines[max_lines - 1]
+        lines[max_lines - 1] = last_line + "..."
+        return '\n'.join(lines[:max_lines])
     return '\n'.join(lines)
 
+def try_parse_value(v):
+    if pd.isna(v): return None
+    s = str(v).strip().replace('%', '').replace(',', '')
+    if s == '': return None
+    if s.lower() in ['total', 'nan', 'none']: return None
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
+def is_question_number(s):
+    s = str(s).strip()
+    if not s: return False
+    if len(s) <= 5 and any(c.isdigit() for c in s):
+        return True
+    return False
 
 def parse_questions_new(df):
+    """解析交叉表数据，支持三种不同的数据格式并自动识别"""
     questions = []
-    # Use the first three columns, renaming them for clarity
+    if df.shape[1] < 3:
+        for i in range(df.shape[1], 3):
+            df[i] = np.nan
+            
     df_subset = df.iloc[:, [0, 1, 2]].copy()
     df_subset.columns = ['col_0', 'col_1', 'col_2']
-
-    current_question_title = None
-    current_question_options = []
-
-    for index, row in df_subset.iterrows():
-        q_num = str(row['col_0'])
-        q_text = row['col_1']
+    
+    curr_title, curr_opts = None, []
+    
+    for _, row in df_subset.iterrows():
+        c0 = str(row['col_0']).strip() if pd.notna(row['col_0']) else ''
+        if c0.lower() == 'nan': c0 = ''
+        c1 = str(row['col_1']).strip() if pd.notna(row['col_1']) else ''
+        if c1.lower() == 'nan': c1 = ''
+        c2 = row['col_2']
+        val = try_parse_value(c2)
         
-        # Heuristic: A new question starts with a numeric-like value in the first column.
-        is_new_question = pd.notna(pd.to_numeric(q_num, errors='coerce'))
-
-        if is_new_question and pd.notna(q_text):
-            # If we were processing a previous question, save it first.
-            if current_question_title and current_question_options:
-                options_df = pd.DataFrame(current_question_options, columns=['Option', 'Value'])
-                questions.append({"title": current_question_title, "data": options_df})
-            
-            # Start the new question
-            current_question_title = q_text
-            current_question_options = []
+        c0_notna = bool(c0)
+        c1_notna = bool(c1)
         
-        # Heuristic: An option row has a non-numeric value in col_0 and some text in col_1
-        elif current_question_title and pd.notna(q_text):
-            option_label = q_text
-            data_value_raw = str(row['col_2'])
+        if not c0_notna and not c1_notna:
+            continue
             
-            try:
-                # Clean the data value (e.g., '1%' -> 1.0)
-                data_value = float(data_value_raw.strip().replace('%', ''))
-                current_question_options.append([option_label, data_value])
-            except (ValueError, AttributeError):
-                pass # Ignore rows where data conversion fails
+        if c0_notna and is_question_number(c0) and c1_notna:
+            if curr_title and curr_opts:
+                questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+            curr_title = c1
+            curr_opts = []
+        elif c0_notna and len(c0) <= 2 and c0.isalpha() and c1_notna and val is not None:
+            if curr_title:
+                curr_opts.append([c1, val])
+        elif c0_notna and c1_notna and val is not None:
+            if curr_title and curr_opts:
+                questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+            curr_title = c0
+            curr_opts = [[c1, val]]
+        elif not c0_notna and c1_notna and val is not None:
+            if curr_title:
+                curr_opts.append([c1, val])
+        elif c0_notna and not c1_notna and val is None:
+             if curr_title and curr_opts:
+                 questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
+             curr_title = c0
+             curr_opts = []
 
-    # Add the very last question being processed
-    if current_question_title and current_question_options:
-        options_df = pd.DataFrame(current_question_options, columns=['Option', 'Value'])
-        questions.append({"title": current_question_title, "data": options_df})
+    if curr_title and curr_opts:
+        questions.append({"title": curr_title, "data": pd.DataFrame(curr_opts, columns=['Option', 'Value'])})
         
     return questions
 
 def main():
-    st.title("交叉表数据可视化应用")
+    st.set_page_config(page_title="数据可视化工具", layout="wide")
+    st.title("📊 交叉表数据可视化")
+    
+    st.info("💡 请确保已将 Alibaba.ttf 字体文件上传到 GitHub 仓库根目录。")
 
-    st.write("你好！这是一个帮助你将交叉表数据可视化的工具。")
-    st.write("请上传您的Excel或CSV文件，应用将自动为您识别问题并生成图表。")
+    uploaded_file = st.file_uploader("第一步：上传您的 Excel 或 CSV 文件", type=["csv", "xlsx", "xls"])
 
-    uploaded_file = st.file_uploader("上传你的交叉表文件", type=["csv", "xlsx", "xls"])
-
-    if uploaded_file is not None:
+    if uploaded_file:
         try:
             if uploaded_file.name.endswith('.csv'):
                 df = pd.read_csv(uploaded_file, header=None)
             else:
                 df = pd.read_excel(uploaded_file, header=None)
             
-            st.write("上传的数据预览：")
-            st.dataframe(df.head())
-
-            import matplotlib.font_manager as fm
-            plt.rcParams['axes.unicode_minus'] = False
-
             parsed_questions = parse_questions_new(df)
 
             if not parsed_questions:
-                st.warning("无法自动识别出任何问题。")
-                st.info("请确保您的文件格式符合预期：第一列为题号，第二列为题目/选项，第三列为数据。")
+                st.error("未能识别出有效题目，请检查文件格式。")
             else:
-                st.success(f"成功识别出 {len(parsed_questions)} 个问题！")
-                st.header("2. 数据可视化")
-
-                font_path = '/System/Library/Fonts/STHeiti Medium.ttc'
-                prop = fm.FontProperties(fname=font_path, size=14)
-                prop_title = fm.FontProperties(fname=font_path, size=32)
+                st.success(f"成功识别到 {len(parsed_questions)} 个题目")
                 
                 charts_for_export = []
-
-                for i, question in enumerate(parsed_questions):
-                    st.subheader(f"题目: {question['title']}")
-
-                    chart_type = st.selectbox(
-                        "选择图表类型",
-                        ["条形图", "柱状图", "饼图"],
-                        key=f"chart_type_{i}"
-                    )
-
-                    plot_df = question['data'].set_index('Option')
-                    data_col = 'Value'
-
-                    if plot_df.empty:
-                        st.warning("处理后无有效数据可供绘图。")
-                        continue
-
-                    fig, ax = plt.subplots(figsize=(12, 8))
+                
+                for i, q in enumerate(parsed_questions):
+                    st.divider()
+                    col1, col2 = st.columns([1, 3])
                     
-                    formatter = FuncFormatter(lambda y, _: f'{y:.0f}%')
-                    labels = plot_df.index.astype(str)
-
-                    if chart_type == "条形图":
-                        wrapped_labels = [smart_wrap(l, width=40) for l in labels]
-                        bars = ax.barh(wrapped_labels, plot_df[data_col])
-                        ax.set_xlabel("百分比", fontproperties=prop)
-                        ax.xaxis.set_major_formatter(formatter)
-                        ax.set_ylabel("", fontproperties=prop)
-                        ax.invert_yaxis()
-                        for bar in bars:
-                            xval = bar.get_width()
-                            ax.text(xval, bar.get_y() + bar.get_height()/2.0, f' {xval:.0f}%', va='center', ha='left', fontproperties=prop)
+                    with col1:
+                        st.write(f"**题目 {i+1}:**")
+                        st.write(q['title'])
+                        ctype = st.selectbox(f"选择类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
                     
-                    elif chart_type == "柱状图":
-                        wrapped_labels = [smart_wrap(l, width=15) for l in labels]
-                        bars = ax.bar(wrapped_labels, plot_df[data_col])
-                        ax.set_ylabel("百分比", fontproperties=prop)
-                        ax.yaxis.set_major_formatter(formatter)
-                        ax.set_xlabel("", fontproperties=prop)
-                        for bar in bars:
-                            yval = bar.get_height()
-                            ax.text(bar.get_x() + bar.get_width()/2.0, yval, f' {yval:.0f}%', va='bottom', ha='center', fontproperties=prop)
+                    with col2:
+                        data = q['data']
+                        labels = data['Option']
+                        values = data['Value']
 
-                    elif chart_type == "饼图":
-                        wedges, _ = ax.pie(plot_df[data_col], startangle=90, pctdistance=0.85, radius=1.2)
-                        ax.axis('equal')
-                        bbox_props = dict(boxstyle="square,pad=0.3", fc="w", ec="k", lw=0.72)
-                        kw = dict(arrowprops=dict(arrowstyle="-"), bbox=bbox_props, zorder=0, va="center")
-                        for j, w in enumerate(wedges):
-                            ang = (w.theta2 - w.theta1)/2. + w.theta1
-                            y = np.sin(np.deg2rad(ang))
-                            x = np.cos(np.deg2rad(ang))
-                            horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
-                            connectionstyle = f"angle,angleA=0,angleB={ang}"
-                            kw["arrowprops"].update({"connectionstyle": connectionstyle})
-                            label_text = f"{plot_df.index[j]}: {plot_df[data_col][j]:.1f}%"
-                            ax.annotate(label_text, xy=(x*1.2, y*1.2), xytext=(1.35*np.sign(x), 1.4*y),
-                                        horizontalalignment=horizontalalignment, **kw, fontproperties=prop)
+                        # --- 核心修改 1：移除条形图的动态高度，强制使用固定 figsize ---
+                        fig, ax = plt.subplots(figsize=(12, 8))
 
-                    prop_title = fm.FontProperties(fname=font_path, size=32)
-                    ax.set_title(question['title'], fontproperties=prop_title, pad=40)
-                    
-                    for label in ax.get_xticklabels() + ax.get_yticklabels():
-                        label.set_fontproperties(prop)
+                        ax.set_title(q['title'], fontproperties=prop_title, pad=20)
 
-                    plt.tight_layout()
-                    
-                    buf = io.BytesIO()
-                    fig.savefig(buf, format="png", bbox_inches="tight")
-                    st.image(buf, use_column_width=True)
-                    charts_for_export.append({"title": question['title'], "chart_type": chart_type, "buffer": buf})
-                    plt.close(fig)
+                        if ctype == "条形图":
+                            wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
+                            bars = ax.barh(wrapped_labels, values, color='#4285F4', height=0.5)
+                            ax.invert_yaxis()
+                            
+                            for t in ax.get_yticklabels(): t.set_fontproperties(prop)
+                            for t in ax.get_xticklabels(): t.set_fontproperties(prop)
+
+                            max_val = max(values) if not values.empty else 100
+                            ax.set_xlim(0, max_val * 1.15) 
+                            
+                            for bar in bars:
+                                ax.text(bar.get_width(), bar.get_y()+bar.get_height()/2, f" {bar.get_width():.1f}%", 
+                                        va='center', fontproperties=prop)
+                        
+                        elif ctype == "柱状图":
+                            wrapped_labels = [smart_wrap(l, 12, max_lines=2) for l in labels]
+                            bars = ax.bar(wrapped_labels, values, color='#34A853')
+                            
+                            for t in ax.get_xticklabels(): t.set_fontproperties(prop)
+                            for t in ax.get_yticklabels(): t.set_fontproperties(prop)
+                            
+                            for bar in bars:
+                                ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f"{bar.get_height():.1f}%", 
+                                        va='bottom', ha='center', fontproperties=prop)
+                        
+                        elif ctype == "饼图":
+                            wedges, texts = ax.pie(values, startangle=90, radius=1.0)
+                            
+                            kw = dict(arrowprops=dict(arrowstyle="-", color="#666666", lw=1.2),
+                                      zorder=0, va="center", fontproperties=prop)
+                            
+                            for idx, p in enumerate(wedges):
+                                ang = (p.theta2 - p.theta1) / 2. + p.theta1
+                                y = np.sin(np.deg2rad(ang))
+                                x = np.cos(np.deg2rad(ang))
+                                
+                                sign_x = 1 if x >= 0 else -1
+                                horizontalalignment = "left" if sign_x == 1 else "right"
+                                
+                                pct_val = values.iloc[idx] if hasattr(values, 'iloc') else values[idx]
+                                opt_name = labels.iloc[idx] if hasattr(labels, 'iloc') else labels[idx]
+                                
+                                label_text = f"{opt_name}（{pct_val:.1f}%）"
+                                wrapped_label = smart_wrap(label_text, 25, max_lines=3)
+                                
+                                ax.annotate(wrapped_label, 
+                                            xy=(x, y), 
+                                            xytext=(1.35 * sign_x, 1.35 * y),
+                                            horizontalalignment=horizontalalignment, 
+                                            **kw)
+                            
+                            wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
+                            ax.legend(wedges, wrapped_legend_labels,
+                                      loc="upper center", bbox_to_anchor=(0.5, -0.15),
+                                      ncol=3, prop=prop, frameon=False)
+                            ax.axis('equal') 
+
+                        # 调整内部边距，让内容去适应设定的 12x8 画布
+                        plt.tight_layout()
+                        
+                        buf = io.BytesIO()
+                        # --- 核心修改 2：去除 bbox_inches="tight"，这是保证像素绝对一致的关键所在 ---
+                        fig.savefig(buf, format="png", dpi=150)
+                        st.image(buf)
+                        charts_for_export.append({"title": q['title'], "buffer": buf})
+                        plt.close(fig)
 
                 if charts_for_export:
-                    st.header("3. 导出图表")
-                    st.info("您可以直接在图表上右键点击‘复制图片’或‘图片另存为’。或使用下方的按钮一次性导出所有图表。")
-                    zip_buffer = io.BytesIO()
-                    with zipfile.ZipFile(zip_buffer, "a", zipfile.ZIP_DEFLATED, False) as zip_file:
-                        for chart in charts_for_export:
-                            safe_title = "".join(c for c in chart['title'] if c.isalnum() or c in (' ', '_')).rstrip()
-                            filename = f"{safe_title}_{chart['chart_type']}.png"
-                            chart['buffer'].seek(0)
-                            zip_file.writestr(filename, chart['buffer'].read())
+                    st.divider()
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, "a") as f:
+                        for c in charts_for_export:
+                            c['buffer'].seek(0)
+                            safe_name = "".join([x for x in c['title'] if x.isalnum() or x in (' ', '_')])[:20]
+                            f.writestr(f"{safe_name}.png", c['buffer'].read())
                     
-                    st.download_button(
-                        label="一键导出所有图表 (ZIP)",
-                        data=zip_buffer.getvalue(),
-                        file_name="所有图表.zip",
-                        mime="application/zip"
-                    )
+                    st.download_button("📥 一键下载所有图表", zip_buf.getvalue(), "all_charts.zip", "application/zip")
 
         except Exception as e:
-            st.error(f"处理文件时出错: {e}")
-
-
+            st.error(f"处理文件时发生错误: {e}")
 
 if __name__ == "__main__":
     main()
