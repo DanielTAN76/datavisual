@@ -172,19 +172,13 @@ def main():
                         labels = data['Option']
                         values = data['Value']
 
-                        # --- 核心修改：针对条形图自适应动态高度，防止标签拥挤 ---
-                        if ctype == "条形图":
-                            # 选项越多，高度越大；基础高度 7，每个选项额外提供 0.7 英寸的高度
-                            fig_height = max(7, 4 + len(labels) * 0.7)
-                            fig, ax = plt.subplots(figsize=(11, fig_height))
-                        else:
-                            fig, ax = plt.subplots(figsize=(11, 7))
+                        # --- 核心修改 1：移除条形图的动态高度，强制使用固定 figsize ---
+                        fig, ax = plt.subplots(figsize=(12, 8))
 
                         ax.set_title(q['title'], fontproperties=prop_title, pad=20)
 
                         if ctype == "条形图":
                             wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
-                            # 设置 height=0.5，让柱子变细，从而增加选项间的空白间距
                             bars = ax.barh(wrapped_labels, values, color='#4285F4', height=0.5)
                             ax.invert_yaxis()
                             
@@ -226,29 +220,27 @@ def main():
                                 pct_val = values.iloc[idx] if hasattr(values, 'iloc') else values[idx]
                                 opt_name = labels.iloc[idx] if hasattr(labels, 'iloc') else labels[idx]
                                 
-                                # --- 核心修改：组合选项名称和带括号的数据 ---
                                 label_text = f"{opt_name}（{pct_val:.1f}%）"
-                                # 允许最多换3行给饼图数据提供充足的展示空间
                                 wrapped_label = smart_wrap(label_text, 25, max_lines=3)
                                 
-                                # 将引导线推远到 1.35 避免拥挤
                                 ax.annotate(wrapped_label, 
                                             xy=(x, y), 
                                             xytext=(1.35 * sign_x, 1.35 * y),
                                             horizontalalignment=horizontalalignment, 
                                             **kw)
                             
-                            # 底部图例框向下调整一点避免重叠
                             wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
                             ax.legend(wedges, wrapped_legend_labels,
                                       loc="upper center", bbox_to_anchor=(0.5, -0.15),
                                       ncol=3, prop=prop, frameon=False)
                             ax.axis('equal') 
 
+                        # 调整内部边距，让内容去适应设定的 12x8 画布
                         plt.tight_layout()
                         
                         buf = io.BytesIO()
-                        fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+                        # --- 核心修改 2：去除 bbox_inches="tight"，这是保证像素绝对一致的关键所在 ---
+                        fig.savefig(buf, format="png", dpi=150)
                         st.image(buf)
                         charts_for_export.append({"title": q['title'], "buffer": buf})
                         plt.close(fig)
