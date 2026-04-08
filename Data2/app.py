@@ -7,9 +7,11 @@ import io
 import zipfile
 import os
 import re
+from matplotlib.ticker import PercentFormatter
 
 # --- 1. 字体安全加载逻辑 ---
 current_dir = os.path.dirname(__file__)
+# 请确保字体文件在同级目录下
 FONT_FILENAME = 'AlibabaPuHuiTi-3-65-Medium.ttf'  
 font_path = os.path.join(current_dir, FONT_FILENAME)
 
@@ -23,6 +25,7 @@ else:
     prop_title = fm.FontProperties(size=18)
     font_available = False
 
+# 解决负号显示问题
 plt.rcParams['axes.unicode_minus'] = False 
 
 def smart_wrap(text, width, max_lines=2):
@@ -64,7 +67,7 @@ def is_question_number(s):
     if len(s) <= 5 and any(c.isdigit() for c in s): return True
     return False
 
-# --- 缓存数据解析，避免修改标题时重复计算导致假死 ---
+# --- 缓存数据解析 ---
 @st.cache_data(show_spinner=False)
 def parse_questions_new(df):
     questions = []
@@ -130,7 +133,6 @@ def main():
                     
                     with col1:
                         st.write(f"**题目 {i+1}:**")
-                        # --- 交互提示优化 ---
                         custom_title = st.text_input("📝 修改标题 (按回车生效)：", value=q['title'], key=f"title_{i}")
                         ctype = st.selectbox(f"选择图表类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
                     
@@ -139,25 +141,59 @@ def main():
                         labels = data['Option']
                         values = data['Value']
 
-                        dynamic_size = max(10.0, float(len(labels)) * 0.8)
-                        fig, ax = plt.subplots(figsize=(dynamic_size, dynamic_size))
-                        ax.set_title(custom_title, fontproperties=prop_title, pad=20)
+                        # 饼图需要特殊的比例和布局处理
+                        if ctype == "饼图":
+                            fig, ax = plt.subplots(figsize=(10, 8)) # 稍微调高高度以容纳图例
+                        else:
+                            dynamic_size = max(10.0, float(len(labels)) * 0.8)
+                            fig, ax = plt.subplots(figsize=(dynamic_size, dynamic_size))
+                        
+                        if ctype == "饼图":
+                            # --- 修改1：减小标题间距 ---
+                            ax.set_title(custom_title, fontproperties=prop_title, pad=5) 
+                        else:
+                            ax.set_title(custom_title, fontproperties=prop_title, pad=20)
 
                         if ctype == "条形图":
+                            # --- 修改2：参考图2设计 ---
                             wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
-                            bars = ax.barh(wrapped_labels, values, color='#4285F4', height=0.5)
+                            # 使用更柔和的蓝色
+                            bars = ax.barh(wrapped_labels, values, color='#5B9BD5', height=0.6) 
                             ax.invert_yaxis()
                             
                             ax.set_box_aspect(1)
                             
+                            # 字体设置
                             for t in ax.get_yticklabels(): t.set_fontproperties(prop)
                             for t in ax.get_xticklabels(): t.set_fontproperties(prop)
-                            max_val = max(values) if not values.empty else 100
-                            ax.set_xlim(0, max_val * 1.15) 
                             
+                            # X轴设置百分比格式
+                            ax.xaxis.set_major_formatter(PercentFormatter(100))
+                            
+                            # 设置范围，留出显示数值的空间
+                            max_val = max(values) if not values.empty else 100
+                            ax.set_xlim(0, max_val * 1.1) 
+                            
+                            # 添加数值标签
                             for bar in bars:
-                                ax.text(bar.get_width(), bar.get_y()+bar.get_height()/2, f" {bar.get_width():.1f}%", va='center', fontproperties=prop)
-                        
+                                ax.text(bar.get_width(), bar.get_y()+bar.get_height()/2, f"{bar.get_width():.1f}%", 
+                                        va='center', ha='left', fontproperties=prop, xytext=(5, 0), textcoords='offset points')
+                            
+                            # --- 核心修改：去掉边框，增加刻度竖线 ---
+                            ax.spines['top'].set_visible(False)
+                            ax.spines['right'].set_visible(False)
+                            ax.spines['bottom'].set_visible(False)
+                            # 保留左侧Y轴线
+                            ax.spines['left'].set_color('#CCCCCC') 
+                            
+                            # 添加 X 轴垂直网格线（刻度竖线）
+                            ax.grid(True, axis='x', linestyle='-', color='#EEEEEE', zorder=0)
+                            # 隐藏 X 轴刻度线本身（只留标签和网格线）
+                            ax.tick_params(axis='x', which='both', bottom=False) 
+                            ax.tick_params(axis='y', colors='#666666')
+
+                            plt.tight_layout()
+
                         elif ctype == "柱状图":
                             wrapped_labels = [smart_wrap(l, 12, max_lines=2) for l in labels]
                             bars = ax.bar(wrapped_labels, values, color='#34A853')
@@ -168,9 +204,14 @@ def main():
                             for t in ax.get_yticklabels(): t.set_fontproperties(prop)
                             for bar in bars:
                                 ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f"{bar.get_height():.1f}%", va='bottom', ha='center', fontproperties=prop)
-                        
+                            plt.tight_layout()
+
                         elif ctype == "饼图":
-                            wedges, texts = ax.pie(values, startangle=90, radius=1.0)
+                            # 饼图不使用 tight_layout，使用 subplots_adjust 精确控制
+                            
+                            wedges, texts = ax.pie(values, startangle=90, radius=1.0, counterclock=False,
+                                                   wedgeprops=dict(width=0.6, edgecolor='w')) # 做成甜甜圈图，视觉更现代
+                            
                             kw = dict(arrowprops=dict(arrowstyle="-", color="#666666", lw=1.2), zorder=0, va="center", fontproperties=prop)
                             
                             for idx, p in enumerate(wedges):
@@ -181,17 +222,31 @@ def main():
                                 horizontalalignment = "left" if sign_x == 1 else "right"
                                 pct_val = values.iloc[idx] if hasattr(values, 'iloc') else values[idx]
                                 opt_name = labels.iloc[idx] if hasattr(labels, 'iloc') else labels[idx]
-                                label_text = f"{opt_name}（{pct_val:.1f}%）"
-                                wrapped_label = smart_wrap(label_text, 25, max_lines=3)
-                                ax.annotate(wrapped_label, xy=(x, y), xytext=(1.35 * sign_x, 1.35 * y), horizontalalignment=horizontalalignment, **kw)
+                                # 优化：将百分比放入标签
+                                label_text = f"{opt_name}\n（{pct_val:.1f}%）"
+                                wrapped_label = smart_wrap(label_text, 20, max_lines=3)
+                                # 稍微减小引导线长度
+                                ax.annotate(wrapped_label, xy=(x, y), xytext=(1.25 * sign_x, 1.25 * y), horizontalalignment=horizontalalignment, **kw)
                             
                             wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
-                            ax.legend(wedges, wrapped_legend_labels, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=3, prop=prop, frameon=False)
+                            # --- 修改1：减小图例与图片间距 ---
+                            # bbox_to_anchor 的 y 值调大（例如 0.0 或 -0.05），使图例上移
+                            lgd = ax.legend(wedges, wrapped_legend_labels, loc="lower center", 
+                                            bbox_to_anchor=(0.5, 0.0), ncol=3, prop=prop, frameon=False)
+                            
                             ax.axis('equal') 
+                            
+                            # --- 修改1：精确调整整体布局空白 ---
+                            # 顶部预留给标题，底部紧凑
+                            plt.subplots_adjust(left=0.1, right=0.9, top=0.92, bottom=0.08)
 
-                        plt.tight_layout()
                         buf = io.BytesIO()
-                        fig.savefig(buf, format="png", dpi=150)
+                        # 饼图已经手动调整了布局，savefig时不需要 bbox_inches='tight'，否则会重新计算空白
+                        if ctype == "饼图":
+                            fig.savefig(buf, format="png", dpi=150)
+                        else:
+                            fig.savefig(buf, format="png", dpi=150, bbox_inches='tight')
+                            
                         st.image(buf)
                         charts_for_export.append({"title": custom_title, "buffer": buf})
                         plt.close(fig)
