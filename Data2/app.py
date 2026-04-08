@@ -146,13 +146,16 @@ def main():
                             fig, ax = plt.subplots(figsize=(dynamic_size, dynamic_size))
                         
                         if ctype == "饼图":
-                            ax.set_title(custom_title, fontproperties=prop_title, pad=5) 
+                            # --- 修改饼图标题间距，适当拉开 ---
+                            ax.set_title(custom_title, fontproperties=prop_title, pad=25) 
                         else:
                             ax.set_title(custom_title, fontproperties=prop_title, pad=20)
 
                         if ctype == "条形图":
                             wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
-                            bars = ax.barh(wrapped_labels, values, color='#5B9BD5', height=0.6) 
+                            
+                            # --- 核心修改：增加 zorder=3 让柱子覆盖在刻度线上层 ---
+                            bars = ax.barh(wrapped_labels, values, color='#5B9BD5', height=0.6, zorder=3) 
                             ax.invert_yaxis()
                             
                             ax.set_box_aspect(1)
@@ -165,7 +168,6 @@ def main():
                             max_val = max(values) if not values.empty else 100
                             ax.set_xlim(0, max_val * 1.1) 
                             
-                            # --- 已修复：将 ax.text 换成了 ax.annotate ---
                             for bar in bars:
                                 ax.annotate(f"{bar.get_width():.1f}%", 
                                             xy=(bar.get_width(), bar.get_y() + bar.get_height() / 2),
@@ -179,7 +181,9 @@ def main():
                             
                             ax.grid(True, axis='x', linestyle='-', color='#EEEEEE', zorder=0)
                             ax.tick_params(axis='x', which='both', bottom=False) 
-                            ax.tick_params(axis='y', colors='#666666')
+                            
+                            # --- 核心修改：Y轴选项文本修改为纯黑色 ---
+                            ax.tick_params(axis='y', colors='black')
 
                             plt.tight_layout()
 
@@ -196,8 +200,9 @@ def main():
                             plt.tight_layout()
 
                         elif ctype == "饼图":
+                            # --- 核心修改：去除 wedgeprops 里的 width=0.6 变回实心饼图 ---
                             wedges, texts = ax.pie(values, startangle=90, radius=1.0, counterclock=False,
-                                                   wedgeprops=dict(width=0.6, edgecolor='w')) 
+                                                   wedgeprops=dict(edgecolor='w')) 
                             
                             kw = dict(arrowprops=dict(arrowstyle="-", color="#666666", lw=1.2), zorder=0, va="center", fontproperties=prop)
                             
@@ -214,11 +219,15 @@ def main():
                                 ax.annotate(wrapped_label, xy=(x, y), xytext=(1.25 * sign_x, 1.25 * y), horizontalalignment=horizontalalignment, **kw)
                             
                             wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
+                            
+                            # --- 核心修改：将 bbox_to_anchor 下移至 -0.1，防止与实心饼图重叠 ---
                             lgd = ax.legend(wedges, wrapped_legend_labels, loc="lower center", 
-                                            bbox_to_anchor=(0.5, 0.0), ncol=3, prop=prop, frameon=False)
+                                            bbox_to_anchor=(0.5, -0.1), ncol=3, prop=prop, frameon=False)
                             
                             ax.axis('equal') 
-                            plt.subplots_adjust(left=0.1, right=0.9, top=0.92, bottom=0.08)
+                            
+                            # --- 核心修改：调整整体边距，上下留足空间 ---
+                            plt.subplots_adjust(left=0.1, right=0.9, top=0.88, bottom=0.12)
 
                         buf = io.BytesIO()
                         if ctype == "饼图":
