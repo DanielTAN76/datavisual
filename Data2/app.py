@@ -64,7 +64,7 @@ def is_question_number(s):
     if len(s) <= 5 and any(c.isdigit() for c in s): return True
     return False
 
-# --- 核心优化 1：引入强缓存机制。无论你改多少次标题，不再重复解析数据，告别假死 ---
+# --- 缓存数据解析，避免修改标题时重复计算导致假死 ---
 @st.cache_data(show_spinner=False)
 def parse_questions_new(df):
     questions = []
@@ -130,8 +130,8 @@ def main():
                     
                     with col1:
                         st.write(f"**题目 {i+1}:**")
-                        # --- 在左侧直接控制该图表的名称，由于加了缓存，这里修改响应会非常快 ---
-                        custom_title = st.text_input("📝 直接修改标题并同步图片：", value=q['title'], key=f"title_{i}")
+                        # --- 交互提示优化 ---
+                        custom_title = st.text_input("📝 修改标题 (按回车生效)：", value=q['title'], key=f"title_{i}")
                         ctype = st.selectbox(f"选择图表类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
                     
                     with col2:
@@ -148,7 +148,6 @@ def main():
                             bars = ax.barh(wrapped_labels, values, color='#4285F4', height=0.5)
                             ax.invert_yaxis()
                             
-                            # --- 核心优化 2：强制内部绘图边界框 (黑线部分) 呈现完美的 1:1 正方形 ---
                             ax.set_box_aspect(1)
                             
                             for t in ax.get_yticklabels(): t.set_fontproperties(prop)
@@ -163,7 +162,6 @@ def main():
                             wrapped_labels = [smart_wrap(l, 12, max_lines=2) for l in labels]
                             bars = ax.bar(wrapped_labels, values, color='#34A853')
                             
-                            # --- 核心优化 2：强制内部绘图边界框 (黑线部分) 呈现完美的 1:1 正方形 ---
                             ax.set_box_aspect(1)
                             
                             for t in ax.get_xticklabels(): t.set_fontproperties(prop)
@@ -189,7 +187,6 @@ def main():
                             
                             wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
                             ax.legend(wedges, wrapped_legend_labels, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=3, prop=prop, frameon=False)
-                            # 饼图自带强制正方形约束
                             ax.axis('equal') 
 
                         plt.tight_layout()
