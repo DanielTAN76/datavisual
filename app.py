@@ -173,4 +173,43 @@ def main():
                             wedges, texts = ax.pie(values, startangle=90, radius=1.0)
                             kw = dict(arrowprops=dict(arrowstyle="-", color="#666666", lw=1.2), zorder=0, va="center", fontproperties=prop)
                             
-                            for idx, p in enumerate
+                            for idx, p in enumerate(wedges):
+                                ang = (p.theta2 - p.theta1) / 2. + p.theta1
+                                y = np.sin(np.deg2rad(ang))
+                                x = np.cos(np.deg2rad(ang))
+                                sign_x = 1 if x >= 0 else -1
+                                horizontalalignment = "left" if sign_x == 1 else "right"
+                                pct_val = values.iloc[idx] if hasattr(values, 'iloc') else values[idx]
+                                opt_name = labels.iloc[idx] if hasattr(labels, 'iloc') else labels[idx]
+                                label_text = f"{opt_name}（{pct_val:.1f}%）"
+                                wrapped_label = smart_wrap(label_text, 25, max_lines=3)
+                                ax.annotate(wrapped_label, xy=(x, y), xytext=(1.35 * sign_x, 1.35 * y), horizontalalignment=horizontalalignment, **kw)
+                            
+                            wrapped_legend_labels = [smart_wrap(l, 20, max_lines=2) for l in labels]
+                            ax.legend(wedges, wrapped_legend_labels, loc="upper center", bbox_to_anchor=(0.5, -0.15), ncol=3, prop=prop, frameon=False)
+                            ax.axis('equal') 
+
+                        plt.tight_layout()
+                        buf = io.BytesIO()
+                        fig.savefig(buf, format="png", dpi=150)
+                        st.image(buf)
+                        charts_for_export.append({"title": custom_title, "buffer": buf})
+                        plt.close(fig)
+
+                if charts_for_export:
+                    st.divider()
+                    zip_buf = io.BytesIO()
+                    with zipfile.ZipFile(zip_buf, "a") as f:
+                        for c in charts_for_export:
+                            c['buffer'].seek(0)
+                            safe_name = "".join([x for x in c['title'] if x.isalnum() or x in (' ', '_')])[:30]
+                            if not safe_name.strip(): safe_name = f"chart_{np.random.randint(1000)}"
+                            f.writestr(f"{safe_name}.png", c['buffer'].read())
+                    
+                    st.download_button("📥 一键打包并应用最新标题下载", zip_buf.getvalue(), "all_charts.zip", "application/zip")
+
+        except Exception as e:
+            st.error(f"处理文件时发生错误: {e}")
+
+if __name__ == "__main__":
+    main()
