@@ -164,7 +164,8 @@ def main():
                     
                     with col1:
                         st.write(f"**题目 {i+1}:**")
-                        st.write(q['title'])
+                        # --- 核心修改 1：增加标题可编辑框，并绑定数据 ---
+                        custom_title = st.text_input("📝 点击下方修改标题：", value=q['title'], key=f"title_{i}")
                         ctype = st.selectbox(f"选择类型", ["条形图", "柱状图", "饼图"], key=f"sel_{i}")
                     
                     with col2:
@@ -172,10 +173,13 @@ def main():
                         labels = data['Option']
                         values = data['Value']
 
-                        # --- 核心修改：将画布尺寸强制设置为 1:1 的正方形，这里使用 10x10 ---
-                        fig, ax = plt.subplots(figsize=(10, 10))
+                        # --- 核心修改 2：自适应正方形尺寸 ---
+                        # 基础尺寸设为 10，每多一个选项增加 0.8 的宽高，保证外框永远是长宽相等的正方形 (1:1)
+                        dynamic_size = max(10.0, float(len(labels)) * 0.8)
+                        fig, ax = plt.subplots(figsize=(dynamic_size, dynamic_size))
 
-                        ax.set_title(q['title'], fontproperties=prop_title, pad=20)
+                        # 标题使用用户自定义的 custom_title
+                        ax.set_title(custom_title, fontproperties=prop_title, pad=20)
 
                         if ctype == "条形图":
                             wrapped_labels = [smart_wrap(l, 35, max_lines=2) for l in labels]
@@ -235,14 +239,14 @@ def main():
                                       ncol=3, prop=prop, frameon=False)
                             ax.axis('equal') 
 
-                        # 调整内部边距，让内容去适应设定的 10x10 画布
                         plt.tight_layout()
                         
                         buf = io.BytesIO()
-                        # 没有 bbox_inches="tight"，保证外框比例完全由 figsize 决定
+                        # 依然不用 bbox_inches="tight"，靠 dynamic_size 撑起 1:1 的画布
                         fig.savefig(buf, format="png", dpi=150)
                         st.image(buf)
-                        charts_for_export.append({"title": q['title'], "buffer": buf})
+                        # --- 核心修改 3：导出时的文件名也同步使用修改后的标题 ---
+                        charts_for_export.append({"title": custom_title, "buffer": buf})
                         plt.close(fig)
 
                 if charts_for_export:
@@ -251,7 +255,10 @@ def main():
                     with zipfile.ZipFile(zip_buf, "a") as f:
                         for c in charts_for_export:
                             c['buffer'].seek(0)
-                            safe_name = "".join([x for x in c['title'] if x.isalnum() or x in (' ', '_')])[:20]
+                            # 确保文件名安全，防止特殊字符报错
+                            safe_name = "".join([x for x in c['title'] if x.isalnum() or x in (' ', '_')])[:30]
+                            # 如果全过滤完为空，给个保底名字
+                            if not safe_name.strip(): safe_name = f"chart_{np.random.randint(1000)}"
                             f.writestr(f"{safe_name}.png", c['buffer'].read())
                     
                     st.download_button("📥 一键下载所有图表", zip_buf.getvalue(), "all_charts.zip", "application/zip")
